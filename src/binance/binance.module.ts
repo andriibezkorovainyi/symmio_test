@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { BinanceService } from './binance.service';
 
-@Module({})
+@Module({
+  providers: [BinanceService]
+})
 export class BinanceModule {}

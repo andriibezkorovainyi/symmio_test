@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    container_name: symmio_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: symmio_db
+    ports:
+      - "15432:15432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - symmio_network
+
+  server:
+    build: .
+    container_name: symmio_server
+    restart: always
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - db
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 15432
+      DATABASE_USER: user
+      DATABASE_PASSWORD: password
+      DATABASE_NAME: symmio_db
+      NODE_ENV: development
+    ports:
+      - "3003:3003"
+    networks:
+      - symmio_network
+    command: ["npm", "run", "start:dev"]
+
+networks:
+  symmio_network:
+
+volumes:
+  pgdata:
