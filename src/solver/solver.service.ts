@@ -5,6 +5,7 @@ import { CreateIntentDto, I_AggOrder, I_Intent, I_Order } from './types';
 import { searchInsert } from '../helpers';
 import BigNumber from 'bignumber.js';
 import * as process from 'node:process';
+import { OrderService } from '../order/order.service';
 
 @Injectable()
 export class SolverService implements OnModuleInit, OnModuleDestroy {
@@ -22,6 +23,7 @@ export class SolverService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly indexService: IndexService,
     private readonly binanceService: BinanceService,
+    private readonly ordersService: OrderService,
   ) {}
 
   onModuleInit(): any {
@@ -62,122 +64,146 @@ export class SolverService implements OnModuleInit, OnModuleDestroy {
   }
 
   processAggOrders(pendingIntents: I_Intent[]) {
-    // check active aggOrders which are not fulfilled
-    // and replace them with new ones if asset price has moved more than 0,1% from the last order price
-    // cancel old ones and push new to the aggOrdersQueue
-    // before creating an order, check if we can match it internally, make trade and update intents
-  }
+    this.processUnfilledAggOrders();
 
-  // Binance receive 10 orders per second
-  // 10 assets in index
+    // symbol -> orders
+    const aggOrders: Record<string, I_AggOrder[]> = {};
 
-  // 1. Create intent - without indexId, since its only one index in our system
-  createIntent(data: CreateIntentDto) {
-    const { userId, amount, price, direction } = data;
+    for (const intent of pendingIntents) {
+      const index = this.indexService.getIndexData(intent.indexId);
 
-    const intent: I_Intent = {
-      id: Symbol('intentId'),
-      userId,
-      amount: BigNumber(amount),
-      price: BigNumber(price),
-      direction: direction,
-      status: 'pending',
-      filledAmount: BigNumber(0),
-      filledPrice: BigNumber(0),
-      fillLoss: BigNumber(0),
-      createdAt: new Date(),
-    };
+      if (!index) {
+        throw new Error('Index not found');
+      }
 
-    const index = this.indexService.getIndexData();
+      const indexPrice = this.indexService.getIndexPrice(index.id);
 
-    if (!index) {
-      throw new Error('Index not found');
-    }
+      if (!indexPrice) {
+        throw new Error('Index price not found');
+      }
 
-    const indexPrice = this.indexService.getIndexPrice();
-
-    if (!indexPrice) {
-      throw new Error('Index price not found');
-    }
-
-    const orders: I_Order[] = [];
-
-    for (const asset of index.assets) {
-      const quantity = BigNumber(amount)
-        .multipliedBy(asset.weight)
-        .dividedBy(indexPrice);
-
-      const assetPrice = BigNumber(this.binanceService.getPrice(asset.symbol));
-
-      const orderPrice = assetPrice.multipliedBy(
-        intent.price.dividedBy(indexPrice),
-      );
-
-      const order: I_Order = {
-        id: Symbol('orderId'),
-        intentId: intent.id,
-        symbol: asset.symbol,
-        direction: direction,
-        quantity: quantity.toString(),
-        price: orderPrice.toString(),
-        createdAt: new Date(),
-      };
-
-      orders.push(order);
-    }
-
-    this.addIntent(intent, intent.id);
-    // orders.forEach((order) => this.addOrder(order, type));
-  }
-
-  private addIntent(intent: I_Intent, intentId: symbol) {
-    const queue = this.intents[intentId];
-
-    const insertIndex = searchInsert(
-      queue,
-      (existingIntent: I_Intent, newIntent: I_Intent) => {
-        const existingIntentVolume = existingIntent.amount.multipliedBy(
-          existingIntent.price,
+      for (const asset of index.assets) {
+        const aggOrdersForAsset = (aggOrders[asset.symbol] || []).find(
+          (aO) => aO.direction === intent.direction,
         );
 
-        const newIntentVolume = newIntent.amount.multipliedBy(newIntent.price);
+        if (!aggOrdersForAsset) {
+          const aggOrderId = Symbol('aggOrderId');
 
-        if (existingIntentVolume.isEqualTo(newIntentVolume)) {
-          return 0;
+          const aggOrder: I_AggOrder = {
+            id: aggOrderId,
+            orderId: 'replaceAfterCreate',
+            clientOrderId: aggOrderId.toString(),
+            indexId: index.id,
+            intentIds: [intent.id],
+            symbol: asset.symbol,
+            direction: intent.direction,
+            status: 'pending',
+            aggQuantity: intent.amount
+              .multipliedBy(asset.qtyPerShare)
+              .toString(),
+            aggPrice: 'setBeforeCreate',
+            filledQuantity: '0',
+            createdAt: new Date(),
+          };
+
+          this.aggOrders.get(asset.symbol)[intent.direction].push(aggOrder);
+        } else {
+          aggOrdersForAsset.aggQuantity = BigNumber(
+            aggOrdersForAsset.aggQuantity,
+          )
+            .plus(intent.amount.multipliedBy(asset.qtyPerShare))
+            .toString();
+        }
+      }
+    }
+
+    for (const [symbol, aOrders] of Object.entries(aggOrders)) {
+      for (const aOrder of aOrders) {
+        const assetLastPrice = this.binanceService.getPrice(aOrder.symbol);
+
+        if (!assetLastPrice) {
+          throw new Error('Asset price not found');
         }
 
-        return newIntentVolume.isGreaterThan(existingIntentVolume) ? 1 : -1;
-      },
-      intent,
-    );
+        aOrder.aggPrice = this.ordersService.calculateOrderPrice(
+          aOrder.symbol,
+          aOrder.aggQuantity,
+          aOrder.direction,
+        );
 
-    queue.splice(insertIndex, 0, intent);
+        this.aggOrders.get(symbol)[aOrder.direction].push(aOrder);
+      }
+    }
+
+    // sort by volume and take 10 orders with the highest volume
   }
 
-  // private addOrder(order: I_Order, type: 'buy' | 'sell') {
-  //   const queue = this.ordersQueue[order.symbol][type];
-  //
-  //   const insertIndex = searchInsert(
-  //     queue,
-  //     (existingOrder: I_Order, newOrder: I_Order) => {
-  //       const existingOrderVolume = BigNumber(existingOrder.price).multipliedBy(
-  //         existingOrder.quantity,
-  //       );
-  //       const newOrderVolume = BigNumber(newOrder.price).multipliedBy(
-  //         newOrder.quantity,
-  //       );
-  //
-  //       if (existingOrderVolume.isEqualTo(newOrderVolume)) {
-  //         return 0;
-  //       }
-  //
-  //       return newOrderVolume.isGreaterThan(existingOrderVolume) ? 1 : -1;
-  //     },
-  //     order,
-  //   );
-  //
-  //   queue.splice(insertIndex, 0, order);
-  // }
+  processUnfilledAggOrders() {
+    let aggOrders: I_AggOrder[] = [];
 
-  manageQueue() {}
+    for (const assetOrders of this.aggOrders.values()) {
+      aggOrders = aggOrders.concat(assetOrders.buy, assetOrders.sell);
+    }
+
+    for (const aggOrder of aggOrders) {
+      const { status, aggQuantity, aggPrice, filledQuantity, direction } =
+        aggOrder;
+
+      const assetLastPrice = this.binanceService.getPrice(aggOrder.symbol);
+
+      if (!assetLastPrice) {
+        throw new Error('Asset price not found');
+      }
+
+      if (
+        status === 'active' &&
+        BigNumber(filledQuantity).isLessThan(aggQuantity) &&
+        (direction === 'buy'
+          ? BigNumber(assetLastPrice).gte(
+              BigNumber(aggPrice).multipliedBy(1.001),
+            )
+          : BigNumber(assetLastPrice).lte(
+              BigNumber(aggPrice).multipliedBy(0.999),
+            ))
+      ) {
+        const newAggQuantity = BigNumber(aggQuantity).minus(filledQuantity);
+        const newAggPrice = this.ordersService.calculateOrderPrice(
+          aggOrder.symbol,
+          newAggQuantity,
+          direction,
+        );
+
+        const newAggOrderId = Symbol('aggOrderId');
+
+        const newAggOrder: I_AggOrder = {
+          ...aggOrder,
+          id: newAggOrderId,
+          status: 'pending',
+          aggPrice: newAggPrice,
+          aggQuantity: newAggQuantity.toString(),
+          clientOrderId: newAggOrderId.toString(),
+        };
+
+        this.cancelAggOrder(aggOrder);
+
+        this.aggOrders
+          .get(aggOrder.symbol)
+          [aggOrder.direction].push(newAggOrder);
+      }
+    }
+  }
+
+  cancelAggOrder(aggOrder: I_AggOrder) {
+    const orderId = this.binanceService.cancelOrder(aggOrder.orderId);
+
+    if (orderId) {
+      aggOrder.status = 'cancelled';
+      this.aggOrders.get(aggOrder.symbol)[aggOrder.direction] = this.aggOrders
+        .get(aggOrder.symbol)
+        [aggOrder.direction].filter((aO) => aO.id !== aggOrder.id);
+    }
+
+    return orderId;
+  }
 }

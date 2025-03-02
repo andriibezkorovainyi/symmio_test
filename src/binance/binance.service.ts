@@ -21,4 +21,8 @@ export class BinanceService {
   setPrice(symbol: string, price: string) {
     this.prices[symbol] = price;
   }
+
+  cancelOrder(orderId) {
+    return orderId;
+  }
 }

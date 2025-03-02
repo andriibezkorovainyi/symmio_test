@@ -11,6 +11,8 @@ export interface I_Intent {
 
   userId: symbol;
 
+  indexId: symbol;
+
   amount: BigNumber;
 
   price: BigNumber;
@@ -31,7 +33,7 @@ export interface I_Intent {
 export interface I_Order {
   id: symbol | string;
 
-  // intentId: symbol;
+  intentId: symbol;
 
   symbol: string;
 
@@ -39,9 +41,9 @@ export interface I_Order {
 
   quantity: string;
 
-  filledQuantity: string;
+  // filledQuantity: string;
 
-  price: string;
+  // price: string;
 
   createdAt: Date;
 }
@@ -49,17 +51,29 @@ export interface I_Order {
 export interface I_AggOrder {
   id: symbol;
 
+  // from binance response
+  orderId: string;
+
+  // to match orders response with existing agg orders
+  clientOrderId: string;
+
+  indexId: symbol;
+
   symbol: string;
 
   intentIds: symbol[];
 
   // orderIds: symbol | string[];
 
+  status: 'pending' | 'active' | 'fulfilled' | 'cancelled';
+
   direction: 'buy' | 'sell';
 
   aggQuantity: string;
 
   aggPrice: string;
+
+  filledQuantity: string;
 
   createdAt: Date;
 }
@@ -69,4 +83,5 @@ export type CreateIntentDto = {
   amount: string;
   price: string;
   userId: symbol;
+  indexId: symbol;
 };

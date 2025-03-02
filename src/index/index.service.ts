@@ -9,39 +9,39 @@ interface I_IndexData {
 
   assets: {
     symbol: string;
-    weight: string;
+    qtyPerShare: string;
   }[];
 }
 
 @Injectable()
 export class IndexService {
-  private indexData: I_IndexData;
+  private indexes: Record<symbol, I_IndexData>;
 
   constructor(private readonly binanceService: BinanceService) {}
 
   // create new ETF index
   createIndex(indexData: Pick<I_IndexData, 'assets'>) {
-    this.indexData = {
+    this.indexes = {
       id: Symbol('indexId'),
       assets: indexData.assets,
       initialPrice: '100',
     };
 
-    return this.indexData;
+    return this.indexes;
   }
 
   // get index data
-  getIndexData() {
-    return this.indexData;
+  getIndexData(indexId: symbol) {
+    return this.indexes[indexId];
   }
 
-  getIndexPrice() {
+  getIndexPrice(indexId: symbol) {
     const prices = this.binanceService.getPrices();
     let indexPrice = BigNumber(0);
 
-    for (const asset of this.indexData.assets) {
+    for (const asset of this.indexes[indexId].assets) {
       indexPrice = indexPrice.plus(
-        BigNumber(prices[asset.symbol]).multipliedBy(asset.weight),
+        BigNumber(prices[asset.symbol]).multipliedBy(asset.qtyPerShare),
       );
     }
 
